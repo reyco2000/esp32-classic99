@@ -39,6 +39,26 @@ RS232, TIPI, joystick 2, the debugger.
 Not yet tested: 360K disk images, assembling under Editor/Assembler,
 multicolor and text-bitmap video modes.
 
+## Screenshots
+
+Captured from the board's VGA output.
+
+<table>
+  <tr>
+    <td align="center"><img src="pictures/WIN_20261008_20_47_37_Pro.jpg" width="250" alt="Cartridge selection screen"><br>Cartridge selection screen</td>
+    <td align="center"><img src="pictures/WIN_20261008_20_47_51_Pro.jpg" width="250" alt="Parsec"><br>Parsec</td>
+    <td align="center"><img src="pictures/WIN_20261008_20_48_20_Pro.jpg" width="250" alt="TI Invaders: options"><br>TI Invaders: options</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="pictures/WIN_20261008_20_48_27_Pro.jpg" width="250" alt="TI Invaders"><br>TI Invaders</td>
+    <td align="center"><img src="pictures/WIN_20261008_20_48_52_Pro.jpg" width="250" alt="Editor/Assembler"><br>Editor/Assembler</td>
+    <td align="center"><img src="pictures/WIN_20261008_20_49_19_Pro.jpg" width="250" alt="Disk Manager (F12 menu)"><br>Disk Manager (F12 menu)</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="pictures/WIN_20261008_20_50_27_Pro.jpg" width="250" alt="Program loaded from a disk image"><br>Program loaded from a disk image</td>
+  </tr>
+</table>
+
 ## Hardware
 
 - **TTGO VGA32 v1.4** (ESP32-PICO-D4 with 4 MB PSRAM). The PSRAM is required.
