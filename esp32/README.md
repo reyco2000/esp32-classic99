@@ -12,7 +12,7 @@ audio and storage are driven through [FabGL](https://github.com/fdivitto/FabGL).
 All the code of the port lives in this `esp32/` directory. Everything outside
 it is the unmodified Classic99 source, kept as the reference.
 
-**Version 0.1.0**
+**Version 0.2.0**
 
 ## Features
 
