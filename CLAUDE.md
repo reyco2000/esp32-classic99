@@ -55,7 +55,7 @@ The board's VGA output can be viewed through the `hdmi-capture` MCP server (`cap
 | `src/menu.cpp/.h` | F12 Supervisor menu (FabGL Canvas): Cartridges, Disks, Setup, Reset, About; `config.txt` load/save |
 | `src/kbd_layouts.cpp/.h` | PS/2 keyboard layouts (US, Spain, Latam, French, Italian, Brazil ABNT2) on top of FabGL's, dead keys disabled |
 | `src/ti_types.h` | Types and SD paths |
-| `src/version.h` | Firmware version (`CLASSIC99_ESP32_VERSION`, currently 0.1.0) and build date; shown in About and the boot banner. Bump it per release |
+| `src/version.h` | Firmware version (`CLASSIC99_ESP32_VERSION`, currently 0.2.0) and build date; shown in About and the boot banner. Bump it per release |
 
 SD card (user-supplied, never in the repo):
 ```
