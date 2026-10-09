@@ -99,10 +99,6 @@ tagged commit also gets the commit id, and one with uncommitted changes a hash
 of the firmware, so every different binary has a different version. For a
 release, commit and tag first, then run the script.
 
-How the bootloader hands over to a firmware, and what a firmware must do to
-be loadable from it, is described in
-[`docs/ESP32_bootloader.md`](docs/ESP32_bootloader.md).
-
 `pio run -e bootloader` builds the bootloader firmware alone
 (`.pio/build/bootloader/firmware.bin`); plain `pio run` stays the standalone
 build.
