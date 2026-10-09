@@ -112,10 +112,3 @@ Things that work in principle but have not been tested:
 - [ ] 5th-sprite flag behaviour
 - [ ] Keyboard layouts typed on real non-US keyboards other than Spanish
       (Latam): Spain, French, Italian, Portuguese (Brazil)
-
-Before publishing:
-
-- [ ] Contact Mike Brent (Tursi), as Classic99's licence asks for derived
-      works and ports
-- [ ] Choose a repository to publish to; the current `origin` is the upstream
-      Classic99 repository
