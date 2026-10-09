@@ -8,11 +8,18 @@ The port turns a TTGO VGA32 v1.4 board into a standalone TI-99/4A: plug in a
 VGA monitor, a PS/2 keyboard and an SD card with the TI ROMs, and it boots
 straight to the TI title screen.
 
+<p align="center">
+  <img src="esp32/pictures/WIN_20261008_20_47_32_Pro.jpg" width="360" alt="TI-99/4A title screen on the TTGO VGA32">
+  <img src="esp32/pictures/WIN_20261008_20_48_06_Pro.jpg" width="360" alt="Supervisor menu (F12)">
+</p>
+<p align="center"><em>Boot to the TI title screen, and the Supervisor menu (F12)</em></p>
+
 **Everything about the ESP32 port is in [`esp32/README.md`](esp32/README.md).**
 
 | I want to... | Go to |
 |---|---|
 | See what is emulated and what has been tested | [Features](esp32/README.md#features) |
+| See it running | [Screenshots](esp32/README.md#screenshots) |
 | Know which board and parts I need | [Hardware](esp32/README.md#hardware) |
 | Build and flash the firmware | [Building and flashing](esp32/README.md#building-and-flashing) |
 | Prepare the SD card (ROMs, cartridges, disks) | [SD card](esp32/README.md#sd-card) |
