@@ -13,6 +13,7 @@
 #include "sound9919.h"
 #include "keyboard_ti.h"
 #include "kbd_layouts.h"
+#include "speech.h"
 #include "version.h"
 
 using fabgl::VirtualKey;
@@ -46,11 +47,15 @@ static int nDiskFiles = 0;
 /////////////////////////////////////////////////////////
 // Configuration file: "cart=<name>", "dsk1=<file>" ...
 /////////////////////////////////////////////////////////
+// the Speech setting as saved; it only takes effect when the speech ROM is on the card
+static bool speechWanted = false;
+
 void configSave() {
     FILE *fp = fopen(CONFIG_FILE, "w");
     if (!fp) return;
     fprintf(fp, "debug=%d\n", debugLog ? 1 : 0);
     fprintf(fp, "kbd=%s\n", kbdLayoutId(kbdLayoutGet()));
+    fprintf(fp, "speech=%d\n", speechWanted ? 1 : 0);
     fprintf(fp, "cart=%s\n", cartCurrentName());
     for (int d = 1; d <= TICC_DRIVES; d++) fprintf(fp, "dsk%d=%s\n", d, diskMounted(d));
     fclose(fp);
@@ -84,6 +89,9 @@ void configLoad() {
         if (strcmp(ln, "kbd") == 0) {
             int k = kbdLayoutFind(val);
             if (k >= 0) kbdLayoutSet(k);
+        } else if (strcmp(ln, "speech") == 0) {
+            speechWanted = (val[0] == '1');
+            speechSetEnabled(speechWanted);
         } else if (strcmp(ln, "cart") == 0) {
             int n = cartScan();
             for (int i = 0; i < n; i++) {
@@ -255,7 +263,7 @@ static bool confirm(const char *title, const char *msg1, const char *msg2) {
 }
 
 // 16x12 row icons
-enum { ICON_NONE, ICON_CART, ICON_SLOT, ICON_KEYBOARD, ICON_SPIDER };
+enum { ICON_NONE, ICON_CART, ICON_SLOT, ICON_KEYBOARD, ICON_SPIDER, ICON_SPEECH };
 typedef int (*IconFn)(int idx);
 
 static void drawSmallIcon(fabgl::Canvas &cv, int icon, int x, int y, fabgl::RGB888 fg) {
@@ -292,6 +300,14 @@ static void drawSmallIcon(fabgl::Canvas &cv, int icon, int x, int y, fabgl::RGB8
             fillBox(cv, RGB888(255, 85, 85), x + 9, y + 2, x + 9, y + 2);
             break;
         }
+        case ICON_SPEECH:       // speech bubble with three dots
+            fillBox(cv, TI_WHITE, x + 1, y, x + 14, y + 7);
+            fillBox(cv, TI_WHITE, x + 3, y + 8, x + 6, y + 9);
+            fillBox(cv, TI_WHITE, x + 3, y + 10, x + 4, y + 11);
+            for (int d = 0; d < 3; d++) {
+                fillBox(cv, TI_DKGRAY, x + 4 + d * 3, y + 3, x + 5 + d * 3, y + 4);
+            }
+            break;
         default:
             break;
     }
@@ -599,6 +615,9 @@ static void setupRow(int idx, Row &row) {
     if (idx == 0) {
         strcpy(row.label, "Keyboard");
         strlcpy(row.value, kbdLayoutName(kbdLayoutGet()), sizeof(row.value));
+    } else if (idx == 1) {
+        strcpy(row.label, "Speech");
+        strcpy(row.value, !speechAvailable() ? "no ROM" : speechEnabled() ? "ON" : "OFF");
     } else {
         strcpy(row.label, "Debug log");
         strcpy(row.value, debugLog ? "ON" : "OFF");
@@ -610,17 +629,22 @@ static int keyboardIcon(int idx) {
 }
 
 static int setupIcon(int idx) {
-    return idx == 0 ? ICON_KEYBOARD : ICON_SPIDER;
+    return idx == 0 ? ICON_KEYBOARD : idx == 1 ? ICON_SPEECH : ICON_SPIDER;
 }
 
 static void setupMenu() {
     int sel = 0;
     while (!closeAll) {
-        sel = runList("Setup", 2, setupRow, setupIcon, sel);
+        sel = runList("Setup", 3, setupRow, setupIcon, sel);
         if (sel < 0) return;
         if (sel == 0) {
             int k = runList("Keyboard layout", kbdLayoutCount(), layoutRow, keyboardIcon, kbdLayoutGet());
             if (k >= 0) kbdLayoutSet(k);
+        } else if (sel == 1) {
+            if (speechAvailable()) {    // Enter toggles; a running program notices after a reset
+                speechWanted = !speechEnabled();
+                speechSetEnabled(speechWanted);
+            }
         } else {
             debugLog = !debugLog;       // Enter toggles; saved when the menu closes
         }
@@ -660,8 +684,8 @@ static void aboutScreen() {
     strcpy(info[1].value, CLASSIC99_ESP32_BUILD_DATE);
     strcpy(info[2].label, "PSRAM free");
     snprintf(info[2].value, sizeof(info[2].value), "%u KB", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
-    strcpy(info[3].label, "PSRAM total");
-    snprintf(info[3].value, sizeof(info[3].value), "%u KB", (unsigned)(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024));
+    strcpy(info[3].label, "IRAM available");       // free internal RAM
+    snprintf(info[3].value, sizeof(info[3].value), "%u KB", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
     for (int i = 0; i < 4; i++, y += LIST_ROW_H + 2) {
         drawRowAt(cv, LIST_X, y, LIST_W, 12, true, info[i], false, TI_CYAN);
         DBG("about: %s %s\n", info[i].label, info[i].value);
@@ -673,6 +697,116 @@ static void aboutScreen() {
         if (vk == VirtualKey::VK_F12) closeAll = true;
         if (vk == VirtualKey::VK_F12 || vk == VirtualKey::VK_ESCAPE || vk == VirtualKey::VK_RETURN) return;
     }
+}
+
+/////////////////////////////////////////////////////////
+// Boot error: full-screen warning shown instead of starting the emulator
+/////////////////////////////////////////////////////////
+#define ERR_RED     RGB888(255, 0, 0)
+#define ERR_LTRED   RGB888(255, 85, 85)
+#define ERR_YELLOW  RGB888(255, 255, 85)
+#define ERR_GREEN   RGB888(85, 255, 85)
+#define ERR_TEXT_X  28
+
+// yellow warning triangle with a black "!", 28 wide and 24 high
+static void drawWarningSign(fabgl::Canvas &cv, int x, int y) {
+    fabgl::Point tri[3] = { fabgl::Point(x + 14, y), fabgl::Point(x + 27, y + 23), fabgl::Point(x, y + 23) };
+    cv.setBrushColor(ERR_YELLOW);
+    cv.fillPath(tri, 3);
+    fillBox(cv, TI_BLACK, x + 13, y + 8, x + 15, y + 16);
+    fillBox(cv, TI_BLACK, x + 13, y + 19, x + 15, y + 21);
+}
+
+// DIP memory chip, 120x48: pins top and bottom, pin-1 notch, "ROM" label and a red "?"
+static void drawRomChip(fabgl::Canvas &cv, int x, int y) {
+    for (int i = 0; i < 10; i++) {
+        int px = x + 8 + i * 11;
+        fillBox(cv, TI_GRAY, px, y, px + 5, y + 47);
+    }
+    fillBox(cv, TI_DKGRAY, x, y + 6, x + 119, y + 41);
+    cv.setBrushColor(TI_BLACK);
+    cv.fillEllipse(x, y + 24, 12, 12);
+    fillBox(cv, TI_WHITE, x + 16, y + 14, x + 75, y + 33);
+    cv.setPenColor(TI_BLACK);
+    cv.setBrushColor(TI_WHITE);
+    cv.selectFont(&fabgl::FONT_8x14);
+    cv.drawText(x + 34, y + 17, "ROM");
+
+    cv.setGlyphOptions(fabgl::GlyphOptions().FillBackground(true).DoubleWidth(1));
+    cv.selectFont(&fabgl::FONT_10x20);
+    cv.setBrushColor(TI_DKGRAY);
+    cv.setPenColor(ERR_LTRED);
+    cv.drawText(x + 88, y + 14, "?");
+    cv.setGlyphOptions(fabgl::GlyphOptions().FillBackground(true));
+}
+
+void bootErrorScreen(fabgl::VGAController *display, fabgl::Keyboard *keyboard, bool sdMounted,
+                     const BootRomStatus *roms, int count) {
+    disp = display;
+    kbd = keyboard;
+    fabgl::Canvas cv(disp);
+    const char *headline = sdMounted ? "MISSING ROMS ON SD CARD" : "SD CARD NOT FOUND";
+
+    cv.setGlyphOptions(fabgl::GlyphOptions().FillBackground(true));
+    cv.setBrushColor(TI_BLACK);
+    cv.clear();
+    cv.setPenColor(ERR_RED);
+    cv.drawRectangle(0, 0, VDP_SCREEN_W - 1, VDP_SCREEN_H - 1);
+    cv.drawRectangle(1, 1, VDP_SCREEN_W - 2, VDP_SCREEN_H - 2);
+    drawColourBar(cv, 5);
+    drawColourBar(cv, VDP_SCREEN_H - 15);
+
+    // red band with the warning in double-width letters
+    fillBox(cv, ERR_RED, 2, 19, VDP_SCREEN_W - 3, 50);
+    drawWarningSign(cv, 44, 23);
+    drawWarningSign(cv, VDP_SCREEN_W - 44 - 28, 23);
+    cv.setGlyphOptions(fabgl::GlyphOptions().FillBackground(true).DoubleWidth(1));
+    cv.selectFont(&fabgl::FONT_10x20);
+    cv.setBrushColor(ERR_RED);
+    cv.setPenColor(TI_WHITE);
+    cv.drawText((VDP_SCREEN_W - 20 * 7) / 2, 25, "WARNING");
+    cv.setGlyphOptions(fabgl::GlyphOptions().FillBackground(true));
+
+    drawRomChip(cv, (VDP_SCREEN_W - 120) / 2, 58);
+
+    cv.selectFont(&fabgl::FONT_10x20);
+    cv.setBrushColor(TI_BLACK);
+    cv.setPenColor(ERR_LTRED);
+    cv.drawText((VDP_SCREEN_W - 10 * (int)strlen(headline)) / 2, 112, headline);
+
+    cv.selectFont(&fabgl::FONT_8x8);
+    cv.setPenColor(TI_WHITE);
+    cv.drawText(ERR_TEXT_X, 140, sdMounted ? "Copy these files to the SD card:" : "Insert a FAT card with these files:");
+
+    bool optionalMissing = false;
+    int y = 154;
+    for (int i = 0; i < count; i++, y += 12) {
+        cv.setPenColor(TI_WHITE);
+        cv.drawText(ERR_TEXT_X, y, roms[i].path + 3);       // without the "/SD" mount point
+        if (!sdMounted) continue;
+        const char *state = "OK";
+        fabgl::RGB888 colour = ERR_GREEN;
+        if (!roms[i].present) {
+            state = roms[i].optional ? "MISSING*" : "MISSING";
+            colour = roms[i].optional ? ERR_YELLOW : ERR_LTRED;
+            optionalMissing |= roms[i].optional;
+        }
+        cv.setPenColor(colour);
+        cv.drawText(ERR_TEXT_X + 24 * 8, y, state);
+    }
+    cv.selectFont(&fabgl::FONT_6x8);
+    if (optionalMissing) {
+        cv.setPenColor(TI_GRAY);
+        cv.drawText(ERR_TEXT_X, y + 2, "* optional, only needed for the disk drives");
+    }
+    static const char hint[] = "Press any key to restart";
+    cv.setPenColor(TI_CYAN);
+    cv.drawText((VDP_SCREEN_W - 6 * (int)strlen(hint)) / 2, 210, hint);
+    cv.waitCompletion();
+
+    waitKey();
+    ESP.restart();
+    for (;;) vTaskDelay(1000);
 }
 
 /////////////////////////////////////////////////////////

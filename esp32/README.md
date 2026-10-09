@@ -19,13 +19,14 @@ it is the unmodified Classic99 source, kept as the reference.
 - TMS9900 CPU (Classic99's core), console ROM and GROM, 32K memory expansion
 - TMS9918A video: all four modes and sprites, at 60 frames per second
 - TMS9919 sound on the board's audio jack
+- TI Speech Synthesizer (optional, switched on in Setup; needs the speech ROM)
 - Cartridges: ROM/GROM files (`C`/`D`/`G`) and bank-switched ROMs (378 and 379 types)
 - TI disk controller with three drives (DSK1 to DSK3), using disk images on the SD card
 - PS/2 keyboard with six layouts; joystick 1 on the arrow keys and Tab
 - "Supervisor" on-screen menu (F12) to change cartridges, disks and settings
 - Settings saved on the SD card and restored at power-on
 
-Not emulated: speech synthesiser, F18A / 80 columns, AMS/SAMS memory, cassette,
+Not emulated: F18A / 80 columns, AMS/SAMS memory, cassette,
 RS232, TIPI, joystick 2, the debugger.
 
 ### Tested
@@ -61,6 +62,51 @@ pio run -t upload --upload-port /dev/ttyACM0    # build and flash
 PlatformIO downloads the ESP32 toolchain (`espressif32@6.10.0`) on the first
 build. The serial port must be free while flashing.
 
+### Standalone and ESP32_Bootloader builds
+
+The firmware can be built in two forms, selected by `BUILD_TARGET` in
+`src/config.h`:
+
+| Target | `BUILD_TARGET` | Use |
+|---|---|---|
+| standalone (default) | `BUILD_TARGET_STANDALONE` (0) | flashed over USB; the firmware owns the board |
+| ESP32_Bootloader | `BUILD_TARGET_BOOTLOADER` (1) | started from the SD card menu of [ESP32_Bootloader](https://github.com/ESP-WORKS/ESP32_Bootloader) |
+
+The only difference is that the bootloader build erases the `otadata`
+partition when it starts, so the next power-up returns to the bootloader menu.
+
+`tools/build.sh` builds both without editing `config.h` (it passes
+`-DBUILD_TARGET=1` through the `bootloader` PlatformIO environment):
+
+```bash
+tools/build.sh                  # both
+tools/build.sh standalone       # or only one
+tools/build.sh bootloader
+tools/build.sh all 0.2.0-test1  # optional explicit version string
+```
+
+| Output in `build/` | Use |
+|---|---|
+| `standalone/Classic99-<version>-standalone-merged.bin` | whole flash image: `esptool.py --chip esp32 write_flash 0x0 <file>` |
+| `standalone/Classic99-<version>-standalone-app.bin` | application only, at `0x10000` |
+| `sdcard/Classic99/firmware.bin`, `version.txt` | copy the `Classic99` folder to the root of the SD card |
+| `SHA256SUMS.txt` | checksums of the above |
+
+For ESP32_Bootloader the card then holds `/Classic99/` (the menu entry) next
+to the usual `/ti99/` folder. The bootloader reflashes only when `version.txt`
+changes. The version comes from `src/version.h`; a build that is not a clean,
+tagged commit also gets the commit id, and one with uncommitted changes a hash
+of the firmware, so every different binary has a different version. For a
+release, commit and tag first, then run the script.
+
+How the bootloader hands over to a firmware, and what a firmware must do to
+be loadable from it, is described in
+[`docs/ESP32_bootloader.md`](docs/ESP32_bootloader.md).
+
+`pio run -e bootloader` builds the bootloader firmware alone
+(`.pio/build/bootloader/firmware.bin`); plain `pio run` stays the standalone
+build.
+
 Notes for anyone changing the code:
 
 - `src/cpu9900.cpp` is **generated** from Classic99's `console/cpu9900.cpp`.
@@ -78,12 +124,19 @@ No ROMs, cartridges or disk images are included. Copy your own to the card:
 /ti99/rom/994AROM.BIN     console ROM (8K)
 /ti99/rom/994AGROM.BIN    console GROM (24K)
 /ti99/rom/DISK.BIN        TI disk controller DSR (8K), needed for disk access
+/ti99/rom/SPCHROM.BIN     speech synthesiser ROM (32K), needed for speech
 /ti99/carts/              cartridge images
 /ti99/disks/              disk images (*.dsk)
 /ti99/config.txt          written by the Supervisor menu
 ```
 
 The card is never formatted by the firmware.
+
+If the card cannot be read, or `994AROM.BIN` or `994AGROM.BIN` is missing, the
+emulator does not start: a red warning screen lists the expected files and
+which ones were found. Fix the card and press any key to restart. Without
+`DISK.BIN` the machine starts normally, with no disk drives; without
+`SPCHROM.BIN` it has no speech synthesiser.
 
 **Cartridges** use V9T9-style names. Files are grouped into one cartridge by
 the part of the name before the type suffix, so the names must match:
@@ -144,11 +197,15 @@ F12 closes the menu. The emulation is paused while the menu is open.
   - Enter on a drive that holds a disk unmounts it, after confirmation.
 - **Setup**
   - **Keyboard**: the layout; it applies immediately.
+  - **Speech**: ON/OFF. Attaches the TI Speech Synthesizer. OFF by default;
+    shows `no ROM` when `SPCHROM.BIN` is not on the card. A program that is
+    already running may need a reset to notice the change.
   - **Debug log**: ON/OFF. When ON the firmware prints diagnostics on the
     serial port (boot messages, emulation statistics every 5 s, menu activity).
     OFF by default.
 - **Reset**: resets the console, after confirmation.
-- **About**: credits, firmware version, build date and PSRAM free/total.
+- **About**: credits, firmware version, build date, free PSRAM and free
+  internal RAM.
 - **Resume**: back to the TI-99/4A.
 
 The settings are saved to `/ti99/config.txt` when the menu closes.
@@ -166,6 +223,7 @@ At 115200 baud the firmware accepts commands, mainly for testing:
 | `disk <1-3> [file]` | mount a disk image, or unmount if no file is given |
 | `screen` | print the text on the TI screen |
 | `debug on\|off` | diagnostics for this session (the Setup menu saves the setting) |
+| `speech [on\|off]` | speech synthesiser for this session; alone, prints its state and counters |
 | `type <text>` | type text on the TI (`\|` = Enter, `~` = FCTN+9) |
 | `key f12\|up\|down\|left\|right\|tab\|enter\|esc` | send a menu key |
 
@@ -181,12 +239,16 @@ resets the board.
 | `platformio.ini`, `partitions.csv` | build configuration, 3 MB application partition |
 | `tools/port_cpu.py` | generates `src/cpu9900.cpp` from Classic99's CPU source |
 | `tools/sercmd.py` | serial test helper |
+| `tools/build.sh` | builds the standalone and ESP32_Bootloader firmware into `build/` |
+| `src/config.h` | build target: standalone (default) or ESP32_Bootloader |
 | `src/main.cpp` | start-up, memory allocation, keyboard task, serial console |
 | `src/emu.cpp` | emulation task: instruction loop and 60 Hz pacing |
 | `src/cpu9900.cpp/.h` | TMS9900 CPU (generated from Classic99) |
 | `src/bus.cpp` | memory map, GROM, 9901/CRU, cartridge banking |
 | `src/vdp9918.cpp` | TMS9918A video and scanline renderer |
-| `src/sound9919.cpp` | TMS9919 sound |
+| `src/sound9919.cpp` | TMS9919 sound, mixed with speech |
+| `src/speech.cpp` | speech synthesiser: bus access, timing, sample buffer |
+| `src/speech/` | TMS5220 core and speech ROM reader (MAME, from Classic99's `SpeechDll/`) |
 | `src/keyboard_ti.cpp` | PC keys to the TI key matrix and joystick |
 | `src/kbd_layouts.cpp` | keyboard layouts |
 | `src/cart.cpp` | cartridge scanning and loading |
@@ -208,6 +270,11 @@ PSRAM.
   VGA, PS/2, sound and SD library for the ESP32.
 - **Reinaldo Torres (reyco2000)** — ESP32 / TTGO VGA32 port, co-developed with
   Claude Code.
+- **Frank Palazzolo, Aaron Giles, Jonathan Gevaryahu, Raphael Nabet,
+  Couriersud and Michael Zapf** — the TMS5220 speech synthesiser and speech
+  ROM emulation from [MAME](https://www.mamedev.org/), ported to Classic99 by
+  Tursi as `SpeechDll` (version 2.2). This port uses those files in
+  `src/speech/`.
 - Texas Instruments — the TI-99/4A.
 
 ## Licence
@@ -215,8 +282,27 @@ PSRAM.
 This port is a derived work of Classic99 and remains under Classic99's
 licence (see the Classic99 sources and documentation in the parent
 directory). That licence asks that the author be contacted before derived
-works or ports are distributed. The ported files keep their
+works or ports are distributed; this port is published with Mike Brent's
+permission. The ported files keep their
 "Derived from Classic99 (C) Mike Brent" headers.
+
+### SpeechDll (speech synthesiser)
+
+The files in `src/speech/` (`tms5220.cpp`, `tms5220.h`, `tms5110r.hxx`,
+`spchrom.cpp`, `spchrom.h`, `mame_wannabe.h`) are taken from Classic99's
+`SpeechDll/` and are under the **BSD 3-Clause licence**, separate from the
+Classic99 licence above:
+
+- Licence: BSD-3-Clause; full text in `src/speech/license.txt`
+- Copyright holders: Frank Palazzolo, Aaron Giles, Jonathan Gevaryahu,
+  Raphael Nabet, Couriersud, Michael Zapf
+- Origin: MAME `tms5220` and `spchrom` devices, ported to Classic99 by Tursi
+- Changes in this port: GCC includes and logging macro in `mame_wannabe.h`,
+  and a `talking()` accessor in `tms5220.h`
+
+Redistribution of source or binaries must keep the copyright notice, the
+licence conditions and the disclaimer; the names of the copyright holders may
+not be used to endorse derived products without permission.
 
 FabGL is used under its own licence and is not included here.
 

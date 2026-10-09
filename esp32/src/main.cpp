@@ -10,11 +10,30 @@
 #include "emu.h"
 #include "vdp9918.h"
 #include "sound9919.h"
+#include "speech.h"
 #include "keyboard_ti.h"
 #include "cart.h"
 #include "ticc.h"
 #include "menu.h"
 #include "version.h"
+#include "config.h"
+
+#if BUILD_TARGET == BUILD_TARGET_BOOTLOADER
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+
+// ESP32_Bootloader marks this firmware as the one to boot. Erasing otadata makes
+// the next power-up fall back to the factory partition, i.e. the bootloader menu.
+static void bootloaderReleaseOtadata() {
+  const esp_partition_t *otadata = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
+  if (!otadata) return;
+  esp_partition_erase_range(otadata, 0, otadata->size);
+}
+#define BUILD_TARGET_NAME " [ESP32_Bootloader]"
+#else
+#define BUILD_TARGET_NAME ""
+#endif
 
 fabgl::VGAController DisplayController;
 fabgl::PS2Controller PS2Controller;
@@ -23,6 +42,18 @@ bool debugLog = false;
 static void consoleTask(void *);
 
 static Byte *diskROMImage = nullptr;   // TI disk DSR, wired to the bus once the controller is emulated
+
+// Build with -DBOOT_ERROR_TEST=1 (ROMs missing) or =2 (no SD card) to see the warning screen
+#ifndef BOOT_ERROR_TEST
+#define BOOT_ERROR_TEST 0
+#endif
+
+// files expected on the SD card; the machine runs without DISK.BIN, but has no disk drives
+static BootRomStatus roms[3] = {
+  { TI_ROM_DIR "/994AROM.BIN", false, false },
+  { TI_ROM_DIR "/994AGROM.BIN", false, false },
+  { TI_ROM_DIR "/DISK.BIN", false, true },
+};
 
 static bool loadFile(const char *path, Byte *dest, size_t maxLen, size_t *outLen) {
   FILE *fp = fopen(path, "rb");
@@ -65,9 +96,12 @@ static void inputTask(void *) {
 }
 
 void setup() {
+#if BUILD_TARGET == BUILD_TARGET_BOOTLOADER
+  bootloaderReleaseOtadata();   // must stay the first thing setup() does
+#endif
   Serial.begin(115200);
   delay(300);
-  Serial.println("\nClassic99 ESP32 " CLASSIC99_ESP32_VERSION " (" CLASSIC99_ESP32_BUILD_DATE ")");
+  Serial.println("\nClassic99 ESP32 " CLASSIC99_ESP32_VERSION " (" CLASSIC99_ESP32_BUILD_DATE ")" BUILD_TARGET_NAME);
 
   if (!psramFound()) {
     Serial.println("ERROR: no PSRAM found - a TTGO VGA32 v1.4 is required");
@@ -86,8 +120,13 @@ void setup() {
   cv.waitCompletion();
 
   // Never format the user's card on mount failure.
-  if (!FileBrowser::mountSDCard(false, "/SD")) {
-    fatal(cv, "SD card mount FAILED");
+  bool sdMounted = FileBrowser::mountSDCard(false, "/SD");
+#if BOOT_ERROR_TEST == 2
+  sdMounted = false;
+#endif
+  if (!sdMounted) {
+    Serial.println("BOOT ERROR: SD card mount failed");
+    bootErrorScreen(&DisplayController, PS2Controller.keyboard(), false, roms, 3);
   }
   debugLog = configDebugEnabled();    // read early so the boot messages follow the setting
 
@@ -102,16 +141,26 @@ void setup() {
     fatal(cv, "Out of memory");
   }
 
-  if (!loadFile(TI_ROM_DIR "/994AROM.BIN", consoleROM, 0x2000, nullptr) ||
-      !loadFile(TI_ROM_DIR "/994AGROM.BIN", grom, 0x6000, nullptr)) {
-    fatal(cv, "Console ROMs missing in /ti99/rom");
+  // try all three so the warning screen can show the state of each
+  roms[0].present = loadFile(roms[0].path, consoleROM, 0x2000, nullptr);
+  roms[1].present = loadFile(roms[1].path, grom, 0x6000, nullptr);
+  roms[2].present = loadFile(roms[2].path, diskROMImage, 0x2000, nullptr);
+#if BOOT_ERROR_TEST == 1
+  roms[0].present = roms[1].present = false;
+#endif
+  if (!roms[0].present || !roms[1].present) {
+    for (auto &r : roms) {
+      if (!r.present) Serial.printf("BOOT ERROR: missing %s%s\n", r.path + 3, r.optional ? " (optional)" : "");
+    }
+    bootErrorScreen(&DisplayController, PS2Controller.keyboard(), true, roms, 3);
   }
-  if (loadFile(TI_ROM_DIR "/DISK.BIN", diskROMImage, 0x2000, nullptr)) {
+  if (roms[2].present) {
     diskDSR = diskROMImage;     // enables the disk controller at CRU >1100
   }
 
   vdpInit(&DisplayController);
   soundInit();
+  speechInit();                 // optional speech ROM; switched on by the saved setting
   configLoad();                 // last cartridge and disks
   emuInit();
   printHeap("ready");
@@ -185,12 +234,25 @@ static void serialCommand(char *cmd) {
     // for this session; the Setup menu saves the setting
     debugLog = (cmd[7] == 'n');
     Serial.printf("debug %s\n", debugLog ? "on" : "off");
+  } else if (strncmp(cmd, "speech", 6) == 0) {
+    // speech on|off for this session (the Setup menu saves the setting); alone, prints the state
+    if (cmd[6] == ' ') {
+      emuPause(true);
+      speechSetEnabled(strcmp(cmd + 7, "on") == 0);
+      emuPause(false);
+    }
+    SpeechStats st;
+    speechGetStats(&st);
+    Serial.printf("speech %s%s: %u samples, %u overflows, %u underruns, %u halts%s%s\n",
+                  speechEnabled() ? "on" : "off", speechAvailable() ? "" : " (no ROM)",
+                  (unsigned)st.samples, (unsigned)st.overflows, (unsigned)st.underruns, (unsigned)st.halts,
+                  st.talking ? ", talking" : "", st.halted ? ", cpu halted" : "");
   } else if (strcmp(cmd, "reset") == 0) {
     emuPause(true);
     emuReset();
     emuPause(false);
   } else if (cmd[0]) {
-    Serial.println("commands: ls | cart <n> | eject | reset | disk <1-3> [file] | screen | debug on/off | type <text> (| = Enter) | key f12/up/down/left/right/tab/enter/esc");
+    Serial.println("commands: ls | cart <n> | eject | reset | disk <1-3> [file] | screen | debug on/off | speech [on/off] | type <text> (| = Enter) | key f12/up/down/left/right/tab/enter/esc");
   }
 }
 

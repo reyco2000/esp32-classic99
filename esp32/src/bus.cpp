@@ -10,6 +10,7 @@
 #include "cpu9900.h"
 #include "vdp9918.h"
 #include "sound9919.h"
+#include "speech.h"
 #include "ticc.h"
 
 int skip_interrupt = 0;
@@ -181,7 +182,11 @@ IRAM_ATTR Byte rcpubyte(Word x, READACCESSTYPE rmw) {
                     WAITSTATE(x, rmw);
                     if ((x & 1) || (rmw == ACCESS_FREE)) return 0;
                     return rgrmbyte(x);
-                default:                    // sound, VDP write, speech, GROM write: no read
+                case 0x9000:                // speech read data / status
+                    WAITSTATE(x, rmw);
+                    if ((x & 1) || (rmw == ACCESS_FREE) || !speechEnabled()) return 0;
+                    return speechRead();    // timing handled there
+                default:                    // sound, VDP write, speech write, GROM write: no read
                     WAITSTATE(x, rmw);
                     return 0;
             }
@@ -245,6 +250,10 @@ IRAM_ATTR void wcpubyte(Word x, Byte c) {
                 case 0x8c00:                // VDP write data / address
                     if (x & 1) return;
                     vdpWrite(x, c);
+                    return;
+                case 0x9400:                // speech write data
+                    if ((x & 1) || !speechEnabled()) return;
+                    speechWrite(c);         // timing handled there
                     return;
                 case 0x9c00:                // GROM write data / address
                     if (x & 1) return;

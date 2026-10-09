@@ -4,12 +4,13 @@
 // See the original licence there. Not for distribution without the author's permission.
 //
 // Port notes: runs as a FabGL WaveformGenerator on the sound ISR side. Counters use
-// 8.8 fixed point instead of doubles; DC fade, DAC (cassette), speech and SID mixing
-// are not ported.
+// 8.8 fixed point instead of doubles; DC fade, DAC (cassette) and SID mixing are not
+// ported. Speech samples (speech.cpp) are added to the output here.
 
 #include <Arduino.h>
 #include "fabgl.h"
 #include "sound9919.h"
+#include "speech.h"
 
 // SMS Power logarithmic volume table (as used by Classic99), 0 = loudest, 15 = off
 static const int sms_volume_table[16] = {
@@ -88,7 +89,10 @@ public:
         }
         out += m_noiseOut * m_amp[nVolume[3]];
 
-        return out * volume() / 127;
+        // FabGL does not clamp, and the DAC takes -127..127
+        out = out * volume() / 127 + speechSample(sampleRate());
+        if (out > 127) out = 127; else if (out < -127) out = -127;
+        return out;
     }
 
     TMS9919Generator() {

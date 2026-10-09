@@ -10,6 +10,7 @@
 #include "cpu9900.h"
 #include "vdp9918.h"
 #include "sound9919.h"
+#include "speech.h"
 #include "cart.h"
 #include "ticc.h"
 #include "keyboard_ti.h"
@@ -32,6 +33,7 @@ void emuReset() {
     cartResetBank();
     vdpReset();
     soundReset();
+    speechReset();
     pCPU->reset();              // reads the reset vector from console ROM
     pCPU->ResetCycleCount();
 }
@@ -52,6 +54,7 @@ static IRAM_ATTR bool step() {
     int cycles = pCPU->nCycleCount;
     pCPU->nCycleCount = 0;
     update9901(cycles);
+    if (speechEnabled()) speechAdvance(cycles);
     return vdpAdvance(cycles);
 }
 
